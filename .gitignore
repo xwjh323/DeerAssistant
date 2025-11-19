@@ -13,6 +13,8 @@ target/
 *.ipr
 ### else ###
 target/
+.idea/
+
 
 ### Eclipse ###
 .apt_generated
