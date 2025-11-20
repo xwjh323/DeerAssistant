@@ -1,6 +1,8 @@
 package com.wang.deerassistant.controller;
 
 import com.wang.deerassistant.annotation.LoginUser;
+import com.wang.deerassistant.common.ApiResponse;
+import com.wang.deerassistant.common.ResponseUtil;
 import com.wang.deerassistant.entity.ChatHistory;
 import com.wang.deerassistant.service.ChatHistoryService;
 import dev.langchain4j.data.message.ChatMessage;
@@ -50,14 +52,21 @@ public class ChatController {
 
         List<ChatMessage> messages = new ArrayList<>();
 
-        // 4. 将历史消息添加到上下文
-        for (ChatHistory h : historyList) {
+        // 4. 将历史消息添加到上下文,最长6次对话
+        int MAX_HISTORY = 6;
+
+        int start = Math.max(0, historyList.size() - MAX_HISTORY);
+
+        for (int i = start; i < historyList.size(); i++) {
+            ChatHistory h = historyList.get(i);
+
             if ("user".equals(h.getRole())) {
                 messages.add(UserMessage.from(h.getMessage()));
-            } else if ("ai".equals(h.getRole())) {
+            } else {
                 messages.add(AiMessage.from(h.getMessage()));
             }
         }
+
 
         // 5. 将用户最新提问加入上下文
         messages.add(UserMessage.from(question));
@@ -116,4 +125,20 @@ public class ChatController {
 
         return emitter;
     }
+
+    @GetMapping("/sessions")
+    public ApiResponse<?> listSessions(@LoginUser Long userId) {
+        return ResponseUtil.success(chatHistoryService.listUserSessions(userId));
+    }
+
+    // 返回某个会话的全部历史记录
+    @GetMapping("/history")
+    public ApiResponse<?> history(
+            @LoginUser Long userId,
+            @RequestParam String sessionId
+    ) {
+        List<ChatHistory> list = chatHistoryService.listBySessionId(userId, sessionId);
+        return ResponseUtil.success(list);
+    }
+
 }
