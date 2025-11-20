@@ -19,4 +19,7 @@ public interface ChatHistoryService {
 
     void deleteSession(Long userId, String sessionId);
 
+    List<ChatHistory> getLastTwoMessages(Long userId, String sessionId);
+
+
 }

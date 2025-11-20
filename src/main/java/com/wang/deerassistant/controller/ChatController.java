@@ -5,6 +5,7 @@ import com.wang.deerassistant.common.ApiResponse;
 import com.wang.deerassistant.common.ResponseUtil;
 import com.wang.deerassistant.entity.ChatHistory;
 import com.wang.deerassistant.service.ChatHistoryService;
+import com.wang.deerassistant.service.ChatSessionService;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.StreamingResponseHandler;
@@ -24,6 +25,7 @@ public class ChatController {
 
     private final StreamingChatLanguageModel chatModel;
     private final ChatHistoryService chatHistoryService;
+    private final ChatSessionService chatSessionService;
 
     /**
      * 流式聊天接口，带 sessionId
@@ -105,6 +107,16 @@ public class ChatController {
                 String finalAnswer = aiAnswerBuilder.toString();
                 chatHistoryService.saveAiMessage(userId, finalSessionId, finalAnswer);
 
+                // 自动生成标题
+                String newTitle = chatSessionService.generateTitleIfNeeded(userId, finalSessionId);
+
+                try {
+                    // ★ 发一个事件类型为 "title" 的 SSE 消息
+                    emitter.send(SseEmitter.event()
+                            .name("title")
+                            .data(newTitle));
+                } catch (Exception ignored) {}
+
                 try {
                     emitter.send(SseEmitter.event().name("end").data("[DONE]"));
                 } catch (Exception ignored) {}
@@ -143,7 +155,7 @@ public class ChatController {
     public ApiResponse<?> newSession(@LoginUser Long userId) {
 
         String sessionId = chatHistoryService.createNewSession(userId);
-
+        chatSessionService.createSession(userId, sessionId);
         Map<String, Object> result = new HashMap<>();
         result.put("sessionId", sessionId);
         result.put("title", "新对话");
@@ -157,6 +169,7 @@ public class ChatController {
             @RequestParam String sessionId
     ) {
         chatHistoryService.deleteSession(userId, sessionId);
+        chatSessionService.deleteSession(userId, sessionId);
         return ResponseUtil.success("会话已删除");
     }
 

@@ -101,5 +101,16 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         );
     }
 
+    @Override
+    public List<ChatHistory> getLastTwoMessages(Long userId, String sessionId) {
+        return mapper.selectList(
+                new LambdaQueryWrapper<ChatHistory>()
+                        .eq(ChatHistory::getUserId, userId)
+                        .eq(ChatHistory::getSessionId, sessionId)
+                        .orderByDesc(ChatHistory::getCreatedAt)
+                        .last("LIMIT 2")
+        );
+    }
+
 
 }
