@@ -8,10 +8,7 @@ import com.wang.deerassistant.service.ChatHistoryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -76,6 +73,32 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         }
 
         return new ArrayList<>(map.values());
+    }
+
+    @Override
+    public String createNewSession(Long userId) {
+
+        String sessionId = UUID.randomUUID().toString();
+
+        // 插入一条 system 消息作为会话标题
+        ChatHistory chat = new ChatHistory();
+        chat.setUserId(userId);
+        chat.setSessionId(sessionId);
+        chat.setRole("system");
+        chat.setMessage("新对话");
+        mapper.insert(chat);
+
+        return sessionId;
+    }
+
+    @Override
+    public void deleteSession(Long userId, String sessionId) {
+
+        mapper.delete(
+                new LambdaQueryWrapper<ChatHistory>()
+                        .eq(ChatHistory::getUserId, userId)
+                        .eq(ChatHistory::getSessionId, sessionId)
+        );
     }
 
 

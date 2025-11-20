@@ -15,9 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api/chat")
@@ -139,6 +137,27 @@ public class ChatController {
     ) {
         List<ChatHistory> list = chatHistoryService.listBySessionId(userId, sessionId);
         return ResponseUtil.success(list);
+    }
+
+    @PostMapping("/session/new")
+    public ApiResponse<?> newSession(@LoginUser Long userId) {
+
+        String sessionId = chatHistoryService.createNewSession(userId);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("sessionId", sessionId);
+        result.put("title", "新对话");
+
+        return ResponseUtil.success(result);
+    }
+
+    @DeleteMapping("/session")
+    public ApiResponse<?> deleteSession(
+            @LoginUser Long userId,
+            @RequestParam String sessionId
+    ) {
+        chatHistoryService.deleteSession(userId, sessionId);
+        return ResponseUtil.success("会话已删除");
     }
 
 }

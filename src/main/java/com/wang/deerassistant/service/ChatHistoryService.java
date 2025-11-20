@@ -15,4 +15,8 @@ public interface ChatHistoryService {
 
     List<ChatSessionDto> listUserSessions(Long userId);
 
+    String createNewSession(Long userId);
+
+    void deleteSession(Long userId, String sessionId);
+
 }
