@@ -42,26 +42,28 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- LangChain4j 核心引擎 -->
+        <!-- 核心引擎 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j</artifactId>
-            <version>0.31.0</version>
+            <version>1.0.0-beta1</version>
         </dependency>
 
-        <!-- OpenAI（或 DeepSeek / Azure OpenAI）模型客户端 -->
+        <!-- OpenAI 模型客户端 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>
-            <version>0.31.0</version>
+            <version>1.0.0-beta1</version>
         </dependency>
 
-        <!-- pgvector 依赖 -->
+        <!-- pgvector 支持 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-pgvector</artifactId>
-            <version>0.31.0</version>
+            <version>1.0.0-beta1</version>
         </dependency>
+
+        <!-- 其他你用到的 langchain4j 模块，如 embeddings 等，也要更新到 1.8.0 -->
 
         <!-- PostgreSQL 驱动 -->
         <dependency>

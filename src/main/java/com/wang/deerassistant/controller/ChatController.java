@@ -7,17 +7,26 @@ import com.wang.deerassistant.entity.ChatHistory;
 import com.wang.deerassistant.service.ChatHistoryService;
 import com.wang.deerassistant.service.ChatSessionService;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.output.Response;
+import dev.langchain4j.rag.content.Content;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
+import dev.langchain4j.rag.query.Query;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor
@@ -26,6 +35,8 @@ public class ChatController {
     private final StreamingChatLanguageModel chatModel;
     private final ChatHistoryService chatHistoryService;
     private final ChatSessionService chatSessionService;
+    private final ContentRetriever contentRetriever;
+
 
     /**
      * 流式聊天接口，带 sessionId
@@ -86,12 +97,32 @@ public class ChatController {
             return emitter;
         }
 
+        log.info("开始 RAG 检索：{}", question);
+
+        Query query = Query.from(question);
+
+        List<Content> retrieved = contentRetriever.retrieve(query);
+
+        String ragContext = retrieved.stream()
+                .map(Content::toString)
+                .collect(Collectors.joining("\n"));
+
+        log.info("RAG 检索到 {} 条文档", retrieved.size());
+
+
+
+        if (!ragContext.isEmpty()) {
+            messages.add(SystemMessage.from(
+                    "你是一名鹿科动物识别专家，请完全根据以下知识库内容回答：\n\n" + ragContext
+            ));
+        }
+
 
         // 7. 调用 AI 流式输出
-        chatModel.generate(messages, new StreamingResponseHandler<AiMessage>() {
+        chatModel.chat(messages, new StreamingChatResponseHandler() {
 
             @Override
-            public void onNext(String token) {
+            public void onPartialResponse(String token) {
                 try {
                     aiAnswerBuilder.append(token);
                     emitter.send(SseEmitter.event().data(token));
@@ -101,20 +132,18 @@ public class ChatController {
             }
 
             @Override
-            public void onComplete(Response<AiMessage> response) {
+            public void onCompleteResponse(ChatResponse response) {
 
-                // 8. 流式结束后保存 AI 的完整回复
                 String finalAnswer = aiAnswerBuilder.toString();
+
+                // 保存 AI 回复
                 chatHistoryService.saveAiMessage(userId, finalSessionId, finalAnswer);
 
                 // 自动生成标题
                 String newTitle = chatSessionService.generateTitleIfNeeded(userId, finalSessionId);
 
                 try {
-                    // ★ 发一个事件类型为 "title" 的 SSE 消息
-                    emitter.send(SseEmitter.event()
-                            .name("title")
-                            .data(newTitle));
+                    emitter.send(SseEmitter.event().name("title").data(newTitle));
                 } catch (Exception ignored) {}
 
                 try {
@@ -132,6 +161,9 @@ public class ChatController {
                 emitter.completeWithError(error);
             }
         });
+
+
+
 
         return emitter;
     }
@@ -172,5 +204,4 @@ public class ChatController {
         chatSessionService.deleteSession(userId, sessionId);
         return ResponseUtil.success("会话已删除");
     }
-
 }
