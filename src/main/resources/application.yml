@@ -1,0 +1,8 @@
+spring:
+  profiles:
+    active: local
+
+siliconflow:
+  api-key: ${SILICON_API_KEY}
+  model: ${SILICON_MODEL:Qwen/Qwen2.5-72B-Instruct}
+  base-url: https://api.siliconflow.cn/v1

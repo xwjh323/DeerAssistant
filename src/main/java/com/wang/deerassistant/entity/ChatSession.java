@@ -1,0 +1,18 @@
+package com.wang.deerassistant.entity;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+@Data
+public class ChatSession {
+    @TableId(type = IdType.AUTO)
+    private Long id;
+    private Long userId;
+    private String sessionId;
+    private String title;
+    private LocalDateTime createdAt;
+}
+
