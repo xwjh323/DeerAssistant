@@ -14,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
@@ -51,21 +53,33 @@ public class UserServiceImpl implements UserService {
             return ResponseUtil.error("用户名或密码错误");
         }
 
-        // 2. 校验密码
+        // 状态校验
+        if (user.getStatus() != 1) {
+            return ResponseUtil.error("账号已被停用");
+        }
+
+        // 校验密码
         boolean matches = passwordEncoder.matches(request.getPassword(), user.getPassword());
         if (!matches) {
             return ResponseUtil.error("用户名或密码错误");
         }
 
-        // 3. 生成 JWT
-        String token = jwtUtil.generateToken(user.getId(), user.getUsername());
+        // 生成 JWT
+        String token = jwtUtil.generateToken(
+                user.getId(),
+                user.getUsername(),
+                user.getRole()
+        );
+
+        user.setLastLoginAt(LocalDateTime.now());
+        userMapper.updateById(user);
 
         UserLoginResponse resp = UserLoginResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .token(token)
                 .build();
-        // 4. 返回 token + 基本信息
+        // 返回 token + 基本信息
         return ResponseUtil.success(resp);
     }
 }
