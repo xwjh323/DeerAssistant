@@ -1,6 +1,6 @@
 package com.wang.deerassistant.config;
 
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -19,7 +19,7 @@ public class SiliconFlowConfig {
     private String baseUrl;
 
     @Bean
-    public ChatLanguageModel siliconFlowModel() {
+    public ChatModel siliconFlowModel() {
         return OpenAiChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(modelName)

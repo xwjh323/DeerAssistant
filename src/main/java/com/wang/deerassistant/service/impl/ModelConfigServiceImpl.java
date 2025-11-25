@@ -6,7 +6,7 @@ import com.wang.deerassistant.common.ResponseUtil;
 import com.wang.deerassistant.entity.ModelConfig;
 import com.wang.deerassistant.mapper.ModelConfigMapper;
 import com.wang.deerassistant.service.ModelConfigService;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
@@ -84,13 +84,13 @@ public class ModelConfigServiceImpl implements ModelConfigService {
         if (cfg == null) return ResponseUtil.error("模型不存在");
 
         try {
-            ChatLanguageModel model = OpenAiChatModel.builder()
+            ChatModel model = OpenAiChatModel.builder()
                     .apiKey(cfg.getApiKey())
                     .baseUrl(cfg.getBaseUrl())
                     .modelName(cfg.getChatModel())
                     .build();
 
-            String result = model.generate(prompt);
+            String result = model.chat(prompt);
 
             return ResponseUtil.success(result);
 

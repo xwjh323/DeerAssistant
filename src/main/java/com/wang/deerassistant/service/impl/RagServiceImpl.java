@@ -22,4 +22,28 @@ public class RagServiceImpl implements RagService {
         TextSegment segment = TextSegment.from(text);
         pgVectorEmbeddingStore.add(embedding,segment);
     }
+
+    @Override
+    public void addText(String text, Long kbId) {
+        Embedding embedding = embeddingModel.embed(text).content();
+
+        TextSegment segment = TextSegment.from(text);
+        segment.metadata().put("kbId", String.valueOf(kbId));
+
+        pgVectorEmbeddingStore.add(embedding, segment);
+    }
+
+    @Override
+    public void addText(String text, Long kbId, Long docId) {
+        Embedding embedding = embeddingModel.embed(text).content();
+
+        TextSegment segment = TextSegment.from(text);
+        segment.metadata()
+                .put("kbId", String.valueOf(kbId))
+                .put("docId", String.valueOf(docId));
+
+        pgVectorEmbeddingStore.add(embedding, segment);
+    }
+
+
 }

@@ -14,8 +14,8 @@ public class RagController {
     private final RagService ragService;
 
     @PostMapping("/add")
-    public ApiResponse<?> add(@RequestBody String text) {
-        ragService.addText(text);
+    public ApiResponse<?> add(@RequestBody String text,@RequestParam Long kbId,@RequestParam Long docId) {
+        ragService.addText(text,kbId, docId);
         return ResponseUtil.success("知识已添加");
     }
 }
