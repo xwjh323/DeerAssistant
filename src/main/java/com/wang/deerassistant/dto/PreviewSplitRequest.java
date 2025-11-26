@@ -5,12 +5,10 @@ import lombok.Data;
 import java.util.Map;
 
 @Data
-public class UploadDocumentRequest {
-    private Long kbId;
-    private String title;
+public class PreviewSplitRequest {
+
     private String content;
 
-    // 分段参数
+    // splitConfig: mode, maxLevel, chunkSize, includeTitlePath...
     private Map<String, Object> splitConfig;
 }
-

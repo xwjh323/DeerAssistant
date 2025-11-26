@@ -3,10 +3,12 @@ package com.wang.deerassistant.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.wang.deerassistant.common.ApiResponse;
 import com.wang.deerassistant.common.ResponseUtil;
+import com.wang.deerassistant.dto.ChunkPreview;
 import com.wang.deerassistant.entity.KnowledgeDocument;
 import com.wang.deerassistant.mapper.KnowledgeDocumentMapper;
 import com.wang.deerassistant.service.KnowledgeDocumentService;
 
+import com.wang.deerassistant.service.SplitService;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
 
@@ -15,6 +17,7 @@ import dev.langchain4j.data.document.splitter.*;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 
+import dev.langchain4j.internal.Json;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 
@@ -23,9 +26,9 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 @Slf4j
 @Service
@@ -36,6 +39,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
     private final EmbeddingModel embeddingModel;
     private final PgVectorEmbeddingStore vectorStore;
     private final JdbcTemplate postgresJdbcTemplate;
+    private final SplitService splitService;
 
     @Override
     public ApiResponse<?> listDocs(Long kbId) {
@@ -60,7 +64,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         Long docId = doc.getId();
 
         // 2. 构造层级拆分器（段落 > 句子 > 单词）
-        DocumentSplitter splitter = DocumentSplitters.recursive(300,50);
+        DocumentSplitter splitter = DocumentSplitters.recursive(300, 50);
 
         // 3. 正确构造 Document
         Document baseDoc = Document.from(content);
@@ -97,10 +101,10 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
 
         // 1. 查询所有 embedding_id
         String sql = """
-        SELECT embedding_id 
-        FROM deer_knowledge 
-        WHERE metadata->>'docId' = ?
-        """;
+                SELECT embedding_id 
+                FROM deer_knowledge 
+                WHERE metadata->>'docId' = ?
+                """;
 
         List<String> ids = postgresJdbcTemplate.queryForList(
                 sql,
@@ -112,7 +116,6 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         vectorStore.removeAll(ids);
 
         log.info("已从向量库删除 {} 条 chunk", ids.size());
-
 
 
         return ResponseUtil.success("文档与向量已删除");
@@ -129,10 +132,10 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
 
         // 删除旧向量
         String sql = """
-        SELECT embedding_id 
-        FROM deer_knowledge 
-        WHERE metadata->>'docId' = ?
-        """;
+                SELECT embedding_id 
+                FROM deer_knowledge 
+                WHERE metadata->>'docId' = ?
+                """;
 
         List<String> ids = postgresJdbcTemplate.queryForList(
                 sql,
@@ -142,7 +145,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         vectorStore.removeAll(ids);
 
         // 构造 splitter
-        DocumentSplitter splitter = DocumentSplitters.recursive(300,50);
+        DocumentSplitter splitter = DocumentSplitters.recursive(300, 50);
         Document baseDoc = Document.from(content);
 
         List<TextSegment> segments = splitter.split(baseDoc);
@@ -159,4 +162,54 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
 
         return ResponseUtil.success("文档重新向量化完成");
     }
+
+    @Override
+    @Transactional
+    public Object uploadDocument(Long kbId, String title, String content, Map<String, Object> splitConfig) {
+
+        // 1. 保存文档
+        KnowledgeDocument doc = new KnowledgeDocument();
+        doc.setKbId(kbId);
+        doc.setTitle(title);
+        doc.setContent(content);
+        doc.setSplitConfig(Json.toJson(splitConfig));
+        docMapper.insert(doc);
+        Long docId = doc.getId();
+
+        // 2. 最终切分
+        List<ChunkPreview> chunks = (List<ChunkPreview>) splitService.previewSplit(content, splitConfig);
+
+        // 3. 一次 embedding（重要）
+        // 构建 TextSegment 列表
+        List<TextSegment> segments = new ArrayList<>();
+        for (ChunkPreview cp : chunks) {
+            segments.add(TextSegment.from(cp.getContent()));
+        }
+
+        List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+
+        for (int i = 0; i < segments.size(); i++) {
+
+            TextSegment seg = segments.get(i);
+            ChunkPreview cp = chunks.get(i);
+
+            String titlePathJson = Json.toJson(cp.getTitlePath());
+            seg.metadata()
+                    .put("kbId", String.valueOf(kbId))
+                    .put("docId", String.valueOf(docId))
+                    .put("chunkIndex", i)
+                    .put("titlePath", titlePathJson);  // 注意这里必须是 List，不是 toString()
+
+            Embedding emb = embeddings.get(i);
+
+            vectorStore.add(emb, seg);
+        }
+
+        return Map.of(
+                "docId", docId,
+                "chunks", chunks.size()
+        );
+    }
+
+
 }
