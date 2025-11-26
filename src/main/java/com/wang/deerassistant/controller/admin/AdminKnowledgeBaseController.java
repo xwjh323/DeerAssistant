@@ -7,7 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/admin/kb")
+@RequestMapping("/api/admin/kb/base")
 @RequiredArgsConstructor
 public class AdminKnowledgeBaseController {
 
@@ -23,8 +23,15 @@ public class AdminKnowledgeBaseController {
         return kbService.createKb(kb);
     }
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/delete/{id}")
     public ApiResponse<?> delete(@PathVariable Long id) {
         return kbService.deleteKb(id);
+    }
+
+    @PutMapping("/update")
+    public ApiResponse<?> update(
+            @RequestBody KnowledgeBase kb
+    ) {
+        return kbService.updateKb(kb);
     }
 }

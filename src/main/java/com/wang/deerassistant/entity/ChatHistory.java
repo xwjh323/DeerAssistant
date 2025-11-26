@@ -22,6 +22,5 @@ public class ChatHistory {
 
     private String message;
 
-    @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 }

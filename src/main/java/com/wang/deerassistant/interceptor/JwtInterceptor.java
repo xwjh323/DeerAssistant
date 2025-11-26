@@ -27,10 +27,16 @@ public class JwtInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest req, HttpServletResponse resp, Object handler) throws Exception {
 
+        // ★★ 关键：放行所有跨域预检请求 OPTIONS ★★
+        if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {
+            resp.setStatus(HttpServletResponse.SC_OK);
+            return false; // 不继续进入后续逻辑
+        }
+
         String token = req.getHeader("Authorization");
 
         if (token == null || !token.startsWith("Bearer ")) {
-            return unauthorized(resp, "未登录");
+            return writeError(resp, 401, "未登录");
         }
 
         token = token.substring(7); // 去掉 "Bearer "
@@ -38,27 +44,38 @@ public class JwtInterceptor implements HandlerInterceptor {
         try {
             DecodedJWT jwt = jwtUtil.verify(token);
             Long userId = Long.valueOf(jwt.getSubject());
-            Integer role = jwt.getClaim("role").asInt();
 
-            // 查询用户状态
+            // ① 查询用户信息
             User user = userMapper.selectById(userId);
-            if (user == null || user.getStatus() != 1) {
-                return unauthorized(resp, "账号已被禁用");
+            if (user == null) {
+                return writeError(resp, 401, "用户不存在或已被删除");
             }
 
-            String path = req.getRequestURI();
-
-            // 管理员模块校验
-            if (path.startsWith("/api/admin") && role != 0) {
-                return forbidden(resp, "无访问权限");
+            // ② 校验用户状态（1=启用, 0=禁用）
+            Integer status = user.getStatus();
+            if (status != null && status == 0) {
+                return writeError(resp, 403, "账号已被禁用，请联系管理员");
             }
 
-            // 保存到 ThreadLocal
+            // ③ 判断是否访问 admin 接口
+            String uri = req.getRequestURI();
+            boolean adminPath = uri.startsWith("/api/admin/");
+
+            Integer role = user.getRole(); // 约定：0=管理员，1=普通用户
+            if (adminPath) {
+                if (role == null || role != 0) {
+                    return writeError(resp, 403, "无权访问管理员接口");
+                }
+            }
+
+            // ④ 保存到 ThreadLocal
             UserContext.setUserId(userId);
+            UserContext.setUserRole(role);
+
             return true;
 
         } catch (Exception e) {
-            return unauthorized(resp, "登录已过期或无效 token");
+            return writeError(resp, 401, "登录已过期或无效 token");
         }
     }
 
@@ -68,18 +85,10 @@ public class JwtInterceptor implements HandlerInterceptor {
         UserContext.clear();
     }
 
-    private boolean unauthorized(HttpServletResponse resp, String msg) throws IOException {
-        resp.setStatus(401);
+    private boolean writeError(HttpServletResponse resp, int code, String msg) throws IOException {
+        resp.setStatus(code);
         resp.setContentType("application/json;charset=UTF-8");
-        ApiResponse<?> error = ResponseUtil.error(401, msg);
-        resp.getWriter().write(objectMapper.writeValueAsString(error));
-        return false;
-    }
-
-    private boolean forbidden(HttpServletResponse resp, String msg) throws IOException {
-        resp.setStatus(403);
-        resp.setContentType("application/json;charset=UTF-8");
-        ApiResponse<?> error = ResponseUtil.error(403, msg);
+        ApiResponse<?> error = ResponseUtil.error(code, msg);
         resp.getWriter().write(objectMapper.writeValueAsString(error));
         return false;
     }

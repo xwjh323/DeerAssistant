@@ -21,6 +21,7 @@ import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
@@ -34,6 +35,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
     private final KnowledgeDocumentMapper docMapper;
     private final EmbeddingModel embeddingModel;
     private final PgVectorEmbeddingStore vectorStore;
+    private final JdbcTemplate postgresJdbcTemplate;
 
     @Override
     public ApiResponse<?> listDocs(Long kbId) {
@@ -93,11 +95,25 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
 
         docMapper.deleteById(docId);
 
-        vectorStore.removeAll(Collections.singleton("""
-                SELECT embedding_id
-                FROM deer_knowledge
-                WHERE doc_id = %d
-                """.formatted(docId)));
+        // 1. 查询所有 embedding_id
+        String sql = """
+        SELECT embedding_id 
+        FROM deer_knowledge 
+        WHERE metadata->>'docId' = ?
+        """;
+
+        List<String> ids = postgresJdbcTemplate.queryForList(
+                sql,
+                String.class,
+                String.valueOf(docId)
+        );
+
+// 2. 删除向量
+        vectorStore.removeAll(ids);
+
+        log.info("已从向量库删除 {} 条 chunk", ids.size());
+
+
 
         return ResponseUtil.success("文档与向量已删除");
     }
@@ -112,11 +128,18 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         String content = doc.getContent();
 
         // 删除旧向量
-        vectorStore.removeAll(Collections.singleton("""
-                SELECT embedding_id
-                FROM deer_knowledge
-                WHERE doc_id = %d
-                """.formatted(docId)));
+        String sql = """
+        SELECT embedding_id 
+        FROM deer_knowledge 
+        WHERE metadata->>'docId' = ?
+        """;
+
+        List<String> ids = postgresJdbcTemplate.queryForList(
+                sql,
+                String.class,
+                String.valueOf(docId)
+        );
+        vectorStore.removeAll(ids);
 
         // 构造 splitter
         DocumentSplitter splitter = DocumentSplitters.recursive(300,50);

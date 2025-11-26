@@ -1,12 +1,13 @@
 package com.wang.deerassistant.controller.admin;
 
 import com.wang.deerassistant.common.ApiResponse;
+import com.wang.deerassistant.dto.UploadDocumentRequest;
 import com.wang.deerassistant.service.KnowledgeDocumentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/admin/doc")
+@RequestMapping("/api/admin/kb/doc")
 @RequiredArgsConstructor
 public class AdminKnowledgeDocumentController {
 
@@ -18,13 +19,10 @@ public class AdminKnowledgeDocumentController {
     }
 
     @PostMapping("/upload")
-    public ApiResponse<?> upload(
-            @RequestParam Long kbId,
-            @RequestParam String title,
-            @RequestParam String content
-    ) {
-        return docService.uploadDocument(kbId, title, content);
+    public ApiResponse<?> upload(@RequestBody UploadDocumentRequest req) {
+        return docService.uploadDocument(req.getKbId(), req.getTitle(), req.getContent());
     }
+
 
     @DeleteMapping("/{docId}")
     public ApiResponse<?> delete(@PathVariable Long docId) {

@@ -53,33 +53,32 @@ public class UserServiceImpl implements UserService {
             return ResponseUtil.error("用户名或密码错误");
         }
 
-        // 状态校验
-        if (user.getStatus() != 1) {
-            return ResponseUtil.error("账号已被停用");
-        }
-
-        // 校验密码
+        // 2. 校验密码
         boolean matches = passwordEncoder.matches(request.getPassword(), user.getPassword());
         if (!matches) {
             return ResponseUtil.error("用户名或密码错误");
         }
 
-        // 生成 JWT
-        String token = jwtUtil.generateToken(
-                user.getId(),
-                user.getUsername(),
-                user.getRole()
-        );
+        // 3. 校验是否被禁用（防止旧 token 之外的登录）
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            return ResponseUtil.error("账号已被禁用，请联系管理员");
+        }
 
-        user.setLastLoginAt(LocalDateTime.now());
+        // 4. 更新 last_login_at
+        user.setLastLoginAt(java.time.LocalDateTime.now());
         userMapper.updateById(user);
+
+        // 5. 生成 JWT
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getRole());
 
         UserLoginResponse resp = UserLoginResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .token(token)
+                .role(user.getRole())
                 .build();
-        // 返回 token + 基本信息
+
         return ResponseUtil.success(resp);
     }
+
 }
