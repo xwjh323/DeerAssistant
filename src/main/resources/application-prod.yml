@@ -1,0 +1,21 @@
+# =======================
+# Production profile
+# =======================
+spring:
+  config:
+    activate:
+      on-profile: prod
+# =======================
+# JPA（生产模式建议关闭 SQL 输出）
+# =======================
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+# =======================
+# Logging（生产日志级别）
+# =======================
+logging:
+  level:
+    root: INFO

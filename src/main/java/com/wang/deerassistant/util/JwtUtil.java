@@ -19,13 +19,14 @@ public class JwtUtil {
         this.algorithm = Algorithm.HMAC256(jwtProperties.getSecret());
     }
 
-    public String generateToken(Long userId, String username) {
+    public String generateToken(Long userId, String username,Integer role) {
         Date now = new Date();
         Date expire = new Date(now.getTime() + jwtProperties.getExpireSeconds() * 1000);
 
         return JWT.create()
                 .withSubject(String.valueOf(userId))
                 .withClaim("username", username)
+                .withClaim("role", role)
                 .withIssuedAt(now)
                 .withExpiresAt(expire)
                 .sign(algorithm);
@@ -42,5 +43,9 @@ public class JwtUtil {
 
     public String getUsername(String token) {
         return verify(token).getClaim("username").asString();
+    }
+
+    public Integer getRole(String token) {
+        return verify(token).getClaim("role").asInt();
     }
 }

@@ -46,21 +46,21 @@
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j</artifactId>
-            <version>1.0.0-beta1</version>
+            <version>1.8.0</version>
         </dependency>
 
         <!-- OpenAI 模型客户端 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>
-            <version>1.0.0-beta1</version>
+            <version>1.8.0</version>
         </dependency>
 
         <!-- pgvector 支持 -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-pgvector</artifactId>
-            <version>1.0.0-beta1</version>
+            <version>1.8.0-beta15</version>
         </dependency>
 
         <!-- 其他你用到的 langchain4j 模块，如 embeddings 等，也要更新到 1.8.0 -->
@@ -108,6 +108,11 @@
             <version>4.4.0</version>
         </dependency>
 
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark</artifactId>
+            <version>0.21.0</version>
+        </dependency>
 
 
     </dependencies>

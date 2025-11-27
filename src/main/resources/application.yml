@@ -1,8 +1,60 @@
+# =======================
+# SiliconFlow（敏感：key 通过环境变量注入）
+# =======================
+siliconflow:
+  api-key: ${SILICON_API_KEY}  # 必须从环境变量注入
+  model: ${SILICON_MODEL:Qwen/Qwen3-8B}
+  base-url: ${SILICON_BASE_URL:https://api.siliconflow.cn/v1}
+  embedding-model: ${SILICON_EMBED:BAAI/bge-m3}
+
+# =======================
+# Server
+# =======================
+server:
+  port: ${SERVER_PORT:8081}
+
+# =======================
+# MySQL
+# =======================
 spring:
   profiles:
-    active: local
+    active: local  # Jenkins 会启动 prod 环境
+  datasource:
+    mysql:
+      jdbc-url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:deer}?useSSL=false&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      username: ${DB_USER}
+      password: ${DB_PASS}
+      driver-class-name: com.mysql.cj.jdbc.Driver
 
-siliconflow:
-  api-key: ${SILICON_API_KEY}
-  model: ${SILICON_MODEL:Qwen/Qwen2.5-72B-Instruct}
-  base-url: https://api.siliconflow.cn/v1
+    # =======================
+    # PostgreSQL + pgvector
+    # =======================
+    postgres:
+      jdbc-url: jdbc:postgresql://${PG_HOST:localhost}:${PG_PORT:5432}/${PG_DB:deer_db}
+      username: ${PG_USER}
+      password: ${PG_PASS}
+      driver-class-name: org.postgresql.Driver
+      table: ${PG_TABLE:deer_knowledge}
+      dimension: ${PG_DIM:1024}
+
+  # =======================
+  # JPA
+  # =======================
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+# =======================
+# JWT
+# =======================
+jwt:
+  secret: ${JWT_SECRET}
+  expire-seconds: ${JWT_EXPIRE:86400}
+
+# =======================
+# Logging
+# =======================
+logging:
+  level:
+    com.zaxxer.hikari: INFO

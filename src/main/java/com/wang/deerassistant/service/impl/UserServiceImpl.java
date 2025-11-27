@@ -14,6 +14,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
@@ -57,15 +59,26 @@ public class UserServiceImpl implements UserService {
             return ResponseUtil.error("用户名或密码错误");
         }
 
-        // 3. 生成 JWT
-        String token = jwtUtil.generateToken(user.getId(), user.getUsername());
+        // 3. 校验是否被禁用（防止旧 token 之外的登录）
+        if (user.getStatus() != null && user.getStatus() == 0) {
+            return ResponseUtil.error("账号已被禁用，请联系管理员");
+        }
+
+        // 4. 更新 last_login_at
+        user.setLastLoginAt(java.time.LocalDateTime.now());
+        userMapper.updateById(user);
+
+        // 5. 生成 JWT
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getRole());
 
         UserLoginResponse resp = UserLoginResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .token(token)
+                .role(user.getRole())
                 .build();
-        // 4. 返回 token + 基本信息
+
         return ResponseUtil.success(resp);
     }
+
 }

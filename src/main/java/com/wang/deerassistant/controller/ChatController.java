@@ -6,18 +6,28 @@ import com.wang.deerassistant.common.ResponseUtil;
 import com.wang.deerassistant.entity.ChatHistory;
 import com.wang.deerassistant.service.ChatHistoryService;
 import com.wang.deerassistant.service.ChatSessionService;
+import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.StreamingChatLanguageModel;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
+import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+import dev.langchain4j.rag.query.Query;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingSearchResult;
+import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.rag.content.Content;
-import dev.langchain4j.rag.content.retriever.ContentRetriever;
-import dev.langchain4j.rag.query.Query;
+
+import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -32,11 +42,11 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ChatController {
 
-    private final StreamingChatLanguageModel chatModel;
+    private final StreamingChatModel chatModel;
     private final ChatHistoryService chatHistoryService;
     private final ChatSessionService chatSessionService;
-    private final ContentRetriever contentRetriever;
-
+    private final EmbeddingModel embeddingModel;
+    private final PgVectorEmbeddingStore pgVectorEmbeddingStore;
 
     /**
      * 流式聊天接口，带 sessionId
@@ -45,7 +55,8 @@ public class ChatController {
     public SseEmitter chatStream(
             @LoginUser Long userId,
             @RequestParam String question,
-            @RequestParam(required = false) String sessionId
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(required = false, defaultValue = "0") Long kbId
     ) {
 
         // 如果 sessionId 为空，为用户自动创建一个
@@ -97,26 +108,59 @@ public class ChatController {
             return emitter;
         }
 
-        log.info("开始 RAG 检索：{}", question);
+        log.info("开始 RAG 检索：{}, kbId={}", question, kbId);
 
-        Query query = Query.from(question);
+        // 1) 按 kbId 过滤
+        Filter kbFilter = MetadataFilterBuilder
+                .metadataKey("kbId")
+                .isEqualTo(String.valueOf(kbId));
 
-        List<Content> retrieved = contentRetriever.retrieve(query);
+        // 2) 构造 retriever
+        ContentRetriever retriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(pgVectorEmbeddingStore)
+                .embeddingModel(embeddingModel)
+                .filter(kbFilter)
+                .maxResults(5)
+                .build();
 
+        // 3) 执行检索
+        Query ragQuery = Query.from(question);
+        List<Content> retrieved = retriever.retrieve(ragQuery);
+
+        // 4) 安全获取 chunkIndex
+        Comparator<Content> byChunkIndex = Comparator.comparing(c -> {
+            String idx = c.metadata() != null ? (String) c.metadata().get("chunkIndex") : null;
+            if (idx == null || idx.isEmpty()) return Integer.MAX_VALUE;
+            try {
+                return Integer.parseInt(idx);
+            } catch (NumberFormatException e) {
+                return Integer.MAX_VALUE;
+            }
+        });
+
+        // 5) 安全获取 titlePath
         String ragContext = retrieved.stream()
-                .map(Content::toString)
-                .collect(Collectors.joining("\n"));
+                .sorted(byChunkIndex)
+                .map(c -> {
+                    String titlePath = "[]";
+                    if (c.metadata() != null) {
+                        String v = (String) c.metadata().get("titlePath");
+                        if (v != null && !v.isEmpty()) titlePath = v;
+                    }
+                    return "[章节: " + titlePath + "]\n" + c.textSegment();
+                })
+                .collect(Collectors.joining("\n\n"));
 
         log.info("RAG 检索到 {} 条文档", retrieved.size());
+        log.info("RAG 上下文：\n{}", ragContext);
 
-
-
+        // ★ 6) 注入系统提示消息（RAG Context）
         if (!ragContext.isEmpty()) {
             messages.add(SystemMessage.from(
-                    "你是一名鹿科动物识别专家，请完全根据以下知识库内容回答：\n\n" + ragContext
+                    "你是一名鹿科动物识别专家，请根据以下知识库内容回答用户问题：\n\n"
+                            + ragContext
             ));
         }
-
 
         // 7. 调用 AI 流式输出
         chatModel.chat(messages, new StreamingChatResponseHandler() {
@@ -144,11 +188,13 @@ public class ChatController {
 
                 try {
                     emitter.send(SseEmitter.event().name("title").data(newTitle));
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
 
                 try {
                     emitter.send(SseEmitter.event().name("end").data("[DONE]"));
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
 
                 emitter.complete();
             }
@@ -157,12 +203,11 @@ public class ChatController {
             public void onError(Throwable error) {
                 try {
                     emitter.send(SseEmitter.event().name("error").data(error.getMessage()));
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
                 emitter.completeWithError(error);
             }
         });
-
-
 
 
         return emitter;

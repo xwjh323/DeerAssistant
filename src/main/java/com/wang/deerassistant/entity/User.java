@@ -17,6 +17,9 @@ public class User {
     private String username;
     private String password;
     private String avatar;
+    private Integer role;  // 0=admin, 1=user
+    private Integer status; // 1=enabled, 0=disabled
     private LocalDateTime createTime;
+    private LocalDateTime lastLoginAt;
 }
 

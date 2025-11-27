@@ -8,7 +8,7 @@ import com.wang.deerassistant.entity.ChatSession;
 import com.wang.deerassistant.mapper.ChatSessionMapper;
 import com.wang.deerassistant.service.ChatHistoryService;
 import com.wang.deerassistant.service.ChatSessionService;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -22,7 +22,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
     private final ChatSessionMapper mapper;
     private final ChatHistoryService chatHistoryService;
-    private final ChatLanguageModel blockingChatLanguageModel;
+    private final ChatModel blockingChatLanguageModel;
 
     @Override
     public void createSession(Long userId, String sessionId) {
@@ -83,7 +83,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         String title = "";
         try {
             // ④ 调用模型
-            title = blockingChatLanguageModel.generate(prompt);
+            title = blockingChatLanguageModel.chat(prompt);
         } catch (Exception e) {
             // 模型调用失败，不中断对话流程
             System.err.println("标题生成失败: " + e.getMessage());
