@@ -9,6 +9,8 @@ import org.commonmark.parser.Parser;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -64,144 +66,150 @@ public class SplitServiceImpl implements SplitService {
         int maxLevel = (int) config.getOrDefault("maxLevel", 3);
         int chunkSize = (int) config.getOrDefault("chunkSize", 500);
 
-        Parser parser = Parser.builder().build();
-        Node document = parser.parse(markdown);
+        // 1. 按行拆分
+        String[] lines = markdown.split("\n");
 
-        // Step 1: 扫描所有 Heading
-        List<HeadingInfo> headings = collectHeadings(document, markdown);
+        // 2. 正则识别标题行
+        Pattern headingPattern = Pattern.compile("^(#{1,6})\\s+(.+)$");
+        List<HeadingLine> headings = new ArrayList<>();
 
-        // Step 2: 构建区间（heading 到下一个 heading 之间）
-        List<Section> sections = buildSections(headings, markdown);
-
-        // Step 3: 过滤层级，只保留 <= maxLevel
-        sections.removeIf(s -> s.level > maxLevel);
-
-        // Step 4: 为每段生成 titlePath
-        for (Section s : sections) {
-            s.titlePath = buildTitlePath(sections, s);
+        for (int i = 0; i < lines.length; i++) {
+            Matcher m = headingPattern.matcher(lines[i]);
+            if (m.find()) {
+                int level = m.group(1).length();
+                String title = m.group(2).trim();
+                headings.add(new HeadingLine(level, title, i));
+            }
         }
 
-        // Step 5: 如果内容太长，对其进行二次 recursive 切割
-        List<ChunkPreview> results = new ArrayList<>();
+        // 无标题则整个内容作为一级标题
+        if (headings.isEmpty()) {
+            return autoSplit(markdown, config);
+        }
 
-        int idx = 1;
-        for (Section sec : sections) {
+        // 3. 构建 section 列表（每个标题到下一个标题前为一个 section）
+        List<SectionBlock> sections = new ArrayList<>();
 
+        for (int i = 0; i < headings.size(); i++) {
+
+            HeadingLine h = headings.get(i);
+            int startLine = h.lineIndex;                    // 标题所在行
+            int endLine = (i < headings.size() - 1)
+                    ? headings.get(i + 1).lineIndex - 1     // 前一个标题的内容区间结束
+                    : lines.length - 1;                     // 最后一段到文档末尾
+
+            // 构建内容
+            StringBuilder sb = new StringBuilder();
+            for (int j = startLine; j <= endLine; j++) {
+                sb.append(lines[j]).append("\n");
+            }
+
+            sections.add(new SectionBlock(h.level, h.title, sb.toString().trim(), h.lineIndex));
+        }
+
+        // 4. 用标题栈构建 titlePath（正确做法）
+        Deque<String> titleStack = new ArrayDeque<>();
+        List<SectionBlock> withPath = new ArrayList<>();
+
+        for (SectionBlock sec : sections) {
+            // 若当前标题层级 ≤ 栈顶层级，则 pop 掉深层
+            while (!titleStack.isEmpty() && sec.level <= stackLevel(titleStack.peek())) {
+                titleStack.pop();
+            }
+
+            // push 当前标题
+            titleStack.push("#".repeat(sec.level) + " " + sec.title);
+
+            // 构造 titlePath（倒序输出为从 H1 → H2 → H3）
+            List<String> path = new ArrayList<>(titleStack);
+            Collections.reverse(path);
+
+            sec.titlePath = path;
+            withPath.add(sec);
+        }
+
+        // 5. 过滤 maxLevel
+        withPath.removeIf(s -> s.level > maxLevel);
+
+        // 6. 最终生成 chunk 列表 + 二次切分
+        List<ChunkPreview> result = new ArrayList<>();
+        int index = 0;
+
+        for (SectionBlock sec : withPath) {
+
+            // 简单长度判断
             if (sec.content.length() <= chunkSize) {
                 ChunkPreview cp = new ChunkPreview();
-                cp.setIndex(idx++);
+                cp.setIndex(index++);
                 cp.setTitlePath(sec.titlePath);
                 cp.setContent(sec.content);
                 cp.setEstimatedTokens(sec.content.length() / 3);
-                results.add(cp);
+                result.add(cp);
                 continue;
             }
 
-            // 二次 recursive 切割
-            var splitter = dev.langchain4j.data.document.splitter.DocumentSplitters
-                    .recursive(chunkSize, 50);
+            // 长内容 → recursive 二次切分
+            var splitter = dev.langchain4j.data.document.splitter.DocumentSplitters.recursive(
+                    chunkSize,
+                    (int) config.getOrDefault("chunkOverlap", 50)
+            );
 
-            var baseDoc = dev.langchain4j.data.document.Document.from(sec.content);
-            var segments = splitter.split(baseDoc);
+            var doc = dev.langchain4j.data.document.Document.from(sec.content);
+            var pieces = splitter.split(doc);
 
-            for (var seg : segments) {
+            for (var piece : pieces) {
                 ChunkPreview cp = new ChunkPreview();
-                cp.setIndex(idx++);
+                cp.setIndex(index++);
                 cp.setTitlePath(sec.titlePath);
-                cp.setContent(seg.text());
-                cp.setEstimatedTokens(seg.text().length() / 3);
-                results.add(cp);
+                cp.setContent(piece.text());
+                cp.setEstimatedTokens(piece.text().length() / 3);
+                result.add(cp);
             }
         }
 
-        return results;
+        return result;
     }
 
-    // ========== Heading 信息结构 ==========
-    private static class HeadingInfo {
+    /**
+     * 辅助类：标题行（level + text + 行号）
+     */
+    private static class HeadingLine {
         int level;
         String title;
-        int startPos;
-        int endPos;
+        int lineIndex;
+        HeadingLine(int level, String title, int lineIndex) {
+            this.level = level;
+            this.title = title;
+            this.lineIndex = lineIndex;
+        }
     }
 
-    private static class Section {
+    /**
+     * 辅助类：完整 section（标题 + 内容 + 路径）
+     */
+    private static class SectionBlock {
         int level;
         String title;
         String content;
+        int lineIndex;
         List<String> titlePath;
-    }
-
-    // ========== Step1：收集所有标题 ==========
-    private List<HeadingInfo> collectHeadings(Node document, String content) {
-
-        List<HeadingInfo> list = new ArrayList<>();
-
-        document.accept(new AbstractVisitor() {
-            @Override
-            public void visit(Heading h) {
-                HeadingInfo info = new HeadingInfo();
-                info.level = h.getLevel();
-
-                Node n = h.getFirstChild();
-                if (n instanceof Text) {
-                    info.title = ((Text) n).getLiteral();
-                } else {
-                    info.title = "标题解析失败";
-                }
-
-                info.startPos = findNodeStartOffset(h, content);
-                list.add(info);
-
-                super.visit(h);
-            }
-        });
-
-        // 补充 endPos
-        for (int i = 0; i < list.size(); i++) {
-            if (i < list.size() - 1) {
-                list.get(i).endPos = list.get(i + 1).startPos;
-            } else {
-                list.get(i).endPos = content.length();
-            }
+        SectionBlock(int level, String title, String content, int lineIndex) {
+            this.level = level;
+            this.title = title;
+            this.content = content;
+            this.lineIndex = lineIndex;
         }
-
-        return list;
     }
 
-    // 估算节点在原文中的 offset
-    private int findNodeStartOffset(Node node, String content) {
-        String literal = node.getFirstChild() instanceof Text ?
-                ((Text) node.getFirstChild()).getLiteral() : "";
-
-        return content.indexOf(literal);
-    }
-
-    // ========== Step2：基于标题构建 sections ==========
-    private List<Section> buildSections(List<HeadingInfo> heads, String content) {
-        List<Section> list = new ArrayList<>();
-        for (HeadingInfo h : heads) {
-            Section s = new Section();
-            s.level = h.level;
-            s.title = h.title;
-            s.content = content.substring(h.startPos, h.endPos).trim();
-            list.add(s);
+    /**
+     * 辅助工具：通过标题文字推测 level，例如 "# H1" → level=1
+     */
+    private int stackLevel(String t) {
+        int count = 0;
+        for (char c : t.toCharArray()) {
+            if (c == '#') count++;
+            else break;
         }
-        return list;
-    }
-
-    // ========== Step3：构造标题路径 ==========
-    private List<String> buildTitlePath(List<Section> all, Section sec) {
-
-        List<String> path = new ArrayList<>();
-
-        for (Section s : all) {
-            if (s.level <= sec.level && s.content.startsWith(s.title)) {
-                path.add(s.title);
-            }
-            if (s == sec) break;
-        }
-
-        return path;
+        return count;
     }
 }

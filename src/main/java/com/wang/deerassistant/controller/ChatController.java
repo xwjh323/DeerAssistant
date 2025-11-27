@@ -110,44 +110,57 @@ public class ChatController {
 
         log.info("开始 RAG 检索：{}, kbId={}", question, kbId);
 
-// ★ 1) 构造 metadata filter（根据 kbId 动态过滤）
+        // 1) 按 kbId 过滤
         Filter kbFilter = MetadataFilterBuilder
                 .metadataKey("kbId")
                 .isEqualTo(String.valueOf(kbId));
 
-// ★ 2) 基于当前 pgvector store 和 embedding model 构造一个临时 retriever
-//     不改全局配置，不影响其它接口
-        ContentRetriever kbRetriever = EmbeddingStoreContentRetriever.builder()
-                .embeddingStore(pgVectorEmbeddingStore)    // 你的向量库存储
-                .embeddingModel(embeddingModel)   // 你的 embedding 模型
-                .filter(kbFilter)                 // ★ 加入知识库过滤
+        // 2) 构造 retriever
+        ContentRetriever retriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(pgVectorEmbeddingStore)
+                .embeddingModel(embeddingModel)
+                .filter(kbFilter)
                 .maxResults(5)
                 .build();
 
-// ★ 3) 构造 Query（旧 API 仍然需要 Query）
+        // 3) 执行检索
         Query ragQuery = Query.from(question);
+        List<Content> retrieved = retriever.retrieve(ragQuery);
 
-// ★ 4) 执行检索
-        List<Content> retrieved = kbRetriever.retrieve(ragQuery);
+        // 4) 安全获取 chunkIndex
+        Comparator<Content> byChunkIndex = Comparator.comparing(c -> {
+            String idx = c.metadata() != null ? (String) c.metadata().get("chunkIndex") : null;
+            if (idx == null || idx.isEmpty()) return Integer.MAX_VALUE;
+            try {
+                return Integer.parseInt(idx);
+            } catch (NumberFormatException e) {
+                return Integer.MAX_VALUE;
+            }
+        });
 
-// ★ 5) 拼接检索上下文
+        // 5) 安全获取 titlePath
         String ragContext = retrieved.stream()
-                .map(Content::toString)
-                .collect(Collectors.joining("\n"));
+                .sorted(byChunkIndex)
+                .map(c -> {
+                    String titlePath = "[]";
+                    if (c.metadata() != null) {
+                        String v = (String) c.metadata().get("titlePath");
+                        if (v != null && !v.isEmpty()) titlePath = v;
+                    }
+                    return "[章节: " + titlePath + "]\n" + c.textSegment();
+                })
+                .collect(Collectors.joining("\n\n"));
 
         log.info("RAG 检索到 {} 条文档", retrieved.size());
+        log.info("RAG 上下文：\n{}", ragContext);
 
-// ★ 6) 注入系统提示消息（RAG Context）
+        // ★ 6) 注入系统提示消息（RAG Context）
         if (!ragContext.isEmpty()) {
             messages.add(SystemMessage.from(
                     "你是一名鹿科动物识别专家，请根据以下知识库内容回答用户问题：\n\n"
                             + ragContext
             ));
         }
-
-
-
-
 
         // 7. 调用 AI 流式输出
         chatModel.chat(messages, new StreamingChatResponseHandler() {
