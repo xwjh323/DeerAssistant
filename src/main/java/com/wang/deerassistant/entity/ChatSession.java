@@ -15,7 +15,9 @@ public class ChatSession {
     private Long userId;
     private String sessionId;
     private String title;
-    @TableField(fill = FieldFill.INSERT)
+    private Long currentKbId;
+    private LocalDateTime lastSwitchAt;
+    private Integer switchCooldown;
     private LocalDateTime createdAt;
 }
 
