@@ -21,5 +21,7 @@ public interface ChatHistoryService {
 
     List<ChatHistory> getLastTwoMessages(Long userId, String sessionId);
 
+    void saveSystemMessage(Long userId, String sessionId, String message);
+
 
 }

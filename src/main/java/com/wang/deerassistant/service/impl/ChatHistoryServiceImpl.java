@@ -112,5 +112,15 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         );
     }
 
+    @Override
+    public void saveSystemMessage(Long userId, String sessionId, String message) {
+        ChatHistory h = new ChatHistory();
+        h.setUserId(userId);
+        h.setSessionId(sessionId);
+        h.setRole("system");
+        h.setMessage(message);
+        mapper.insert(h);
+    }
+
 
 }

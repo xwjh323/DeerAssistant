@@ -4,6 +4,7 @@ import com.wang.deerassistant.annotation.LoginUser;
 import com.wang.deerassistant.common.ApiResponse;
 import com.wang.deerassistant.common.ResponseUtil;
 import com.wang.deerassistant.dto.RetrievalQuality;
+import com.wang.deerassistant.dto.VisionPredictResponse;
 import com.wang.deerassistant.entity.ChatHistory;
 import com.wang.deerassistant.entity.ChatSession;
 import com.wang.deerassistant.entity.KnowledgeBase;
@@ -11,6 +12,7 @@ import com.wang.deerassistant.mapper.KnowledgeBaseMapper;
 import com.wang.deerassistant.service.ChatHistoryService;
 import com.wang.deerassistant.service.ChatSessionService;
 import com.wang.deerassistant.service.KbRoutingService;
+import com.wang.deerassistant.service.VisionRecognizeService;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -35,7 +37,9 @@ import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.store.embedding.pgvector.PgVectorEmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
@@ -54,6 +58,8 @@ public class ChatController {
     private final PgVectorEmbeddingStore pgVectorEmbeddingStore;
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final KbRoutingService kbRoutingService;
+    private final VisionRecognizeService visionRecognizeService;
+
 
 
     /**
@@ -80,8 +86,99 @@ public class ChatController {
         // 1. 保存用户消息
         chatHistoryService.saveUserMessage(userId, finalSessionId, question);
 
+        return doStreamChat(userId,finalSessionId,question);
+    }
+
+
+    @GetMapping("/sessions")
+    public ApiResponse<?> listSessions(@LoginUser Long userId) {
+        return ResponseUtil.success(chatHistoryService.listUserSessions(userId));
+    }
+
+    // 返回某个会话的全部历史记录
+    @GetMapping("/history")
+    public ApiResponse<?> history(
+            @LoginUser Long userId,
+            @RequestParam String sessionId
+    ) {
+        List<ChatHistory> list = chatHistoryService.listBySessionId(userId, sessionId);
+        return ResponseUtil.success(list);
+    }
+
+    @PostMapping("/session/new")
+    public ApiResponse<?> newSession(@LoginUser Long userId) {
+
+        String sessionId = chatHistoryService.createNewSession(userId);
+        chatSessionService.createSession(userId, sessionId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("sessionId", sessionId);
+        result.put("title", "新对话");
+
+        return ResponseUtil.success(result);
+    }
+
+    @DeleteMapping("/session")
+    public ApiResponse<?> deleteSession(
+            @LoginUser Long userId,
+            @RequestParam String sessionId
+    ) {
+        chatHistoryService.deleteSession(userId, sessionId);
+        chatSessionService.deleteSession(userId, sessionId);
+        return ResponseUtil.success("会话已删除");
+    }
+
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStreamMultipart(
+            @LoginUser Long userId,
+            @RequestParam(required = false) String question,
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(required = false) MultipartFile file
+    ) {
+        if (sessionId == null || sessionId.isEmpty()) {
+            sessionId = UUID.randomUUID().toString();
+        }
+        String finalSessionId = sessionId;
+
+        // session 保障
+        chatSessionService.ensureSessionExists(userId, finalSessionId);
+        chatSessionService.tickCooldown(userId, finalSessionId);
+
+        // 如果带图片：先识别，再构造增强 question
+        VisionPredictResponse pred = null;
+        if (file != null && !file.isEmpty()) {
+            pred = visionRecognizeService.predict(file);
+
+            String userText = (question == null || question.isBlank())
+                    ? "请识别图中鹿科动物并科普。"
+                    : question;
+
+            // 只取 score 最高的类别
+            String bestEn = pickBestLabel(pred);
+            double bestScore = pickBestScore(pred, bestEn);
+            String bestZh = mapToChinese(bestEn);
+
+            // 用“中文+英文+分数”构造提示词（更利于中文知识库检索）
+            question = buildQuestionWithPrediction(userText, bestZh, bestEn, bestScore);
+
+            // 推荐：存一条 system 记录（中英都存，便于追溯）
+            chatHistoryService.saveSystemMessage(userId, finalSessionId,
+                    String.format("[VISION] predicted=%s(%s) score=%.4f",
+                            bestZh, bestEn, bestScore));
+        }
+
+        // 保存用户消息（保存增强后的 question，保证可复现）
+        chatHistoryService.saveUserMessage(userId, finalSessionId, question);
+
+        // 复用你原来的 SSE/RAG 主流程
+        return doStreamChat(userId, finalSessionId, question);
+    }
+
+    private SseEmitter doStreamChat(Long userId, String sessionId, String question) {
+        // ✅ 这里直接把你原来 GET 方法中
+        // 从 “2. 拉历史（最多6条）” 到 return emitter 的全部逻辑粘过来
+        // 唯一注意：不要再生成 sessionId；直接用入参 sessionId
         // 2. 拉历史（最多6条）
-        List<ChatHistory> historyList = chatHistoryService.listBySessionId(userId, finalSessionId);
+        List<ChatHistory> historyList = chatHistoryService.listBySessionId(userId, sessionId);
 
         List<ChatMessage> messages = new ArrayList<>();
         int MAX_HISTORY = 6;
@@ -91,7 +188,7 @@ public class ChatController {
         // 我们用一个简单约定：若 role=ai，则在文本前加 [KB=<currentKbId|NONE>]
         // 由于历史表没存 sourceKbId，这里用“当前会话kb”做弱标注；
         // 若你想更准，需要把每条 AI 消息的 source_kb_id 单独存表（后续再升级）。
-        ChatSession session = chatSessionService.getSession(userId, finalSessionId);
+        ChatSession session = chatSessionService.getSession(userId, sessionId);
         Long sessionKb = session != null ? session.getCurrentKbId() : null;
         String kbTag = "[KB=" + (sessionKb == null ? "NONE" : sessionKb) + "] ";
 
@@ -115,14 +212,14 @@ public class ChatController {
 
         // 先把 sessionId 回给前端（你原来就有）
         try {
-            emitter.send(SseEmitter.event().name("session").data(finalSessionId));
+            emitter.send(SseEmitter.event().name("session").data(sessionId));
         } catch (Exception e) {
             emitter.completeWithError(e);
             return emitter;
         }
 
         // ✅ 选择 kbId（用户无感）
-        Long chosenKbId = decideKbIdSilently(userId, finalSessionId, question);
+        Long chosenKbId = decideKbIdSilently(userId, sessionId, question);
 
         // ✅ 做检索（kbId=null => NONE 不检索）
         String ragContext = "";
@@ -165,9 +262,9 @@ public class ChatController {
                 String finalAnswer = aiAnswerBuilder.toString();
 
                 // 保存 AI 回复（对用户透明，不保存 KB tag）
-                chatHistoryService.saveAiMessage(userId, finalSessionId, finalAnswer);
+                chatHistoryService.saveAiMessage(userId, sessionId, finalAnswer);
 
-                String newTitle = chatSessionService.generateTitleIfNeeded(userId, finalSessionId);
+                String newTitle = chatSessionService.generateTitleIfNeeded(userId, sessionId);
                 try { emitter.send(SseEmitter.event().name("title").data(newTitle)); } catch (Exception ignored) {}
                 try { emitter.send(SseEmitter.event().name("end").data("[DONE]")); } catch (Exception ignored) {}
 
@@ -184,42 +281,33 @@ public class ChatController {
         return emitter;
     }
 
+    private String buildQuestionWithPrediction(String userText,
+                                               String zhLabel,
+                                               String enLabel,
+                                               double score) {
 
-    @GetMapping("/sessions")
-    public ApiResponse<?> listSessions(@LoginUser Long userId) {
-        return ResponseUtil.success(chatHistoryService.listUserSessions(userId));
-    }
+        // 分数阈值：你可以自己调；低分就更谨慎
+        if (score < 0.5) {
+            return String.format("""
+                用户补充：%s
+                图像识别结果倾向于：%s（%s，置信度%.2f）。
+                由于置信度较低，请你结合知识库：
+                1) 给出该物种的关键形态特征与栖息环境；
+                2) 提供与常见混淆鹿科的区分点；
+                3) 提示用户补拍哪些特征可提高确定性；
+                4) 结论用谨慎表述。
+                """, userText, zhLabel, enLabel, score);
+        }
 
-    // 返回某个会话的全部历史记录
-    @GetMapping("/history")
-    public ApiResponse<?> history(
-            @LoginUser Long userId,
-            @RequestParam String sessionId
-    ) {
-        List<ChatHistory> list = chatHistoryService.listBySessionId(userId, sessionId);
-        return ResponseUtil.success(list);
-    }
-
-    @PostMapping("/session/new")
-    public ApiResponse<?> newSession(@LoginUser Long userId) {
-
-        String sessionId = chatHistoryService.createNewSession(userId);
-        chatSessionService.createSession(userId, sessionId);
-        Map<String, Object> result = new HashMap<>();
-        result.put("sessionId", sessionId);
-        result.put("title", "新对话");
-
-        return ResponseUtil.success(result);
-    }
-
-    @DeleteMapping("/session")
-    public ApiResponse<?> deleteSession(
-            @LoginUser Long userId,
-            @RequestParam String sessionId
-    ) {
-        chatHistoryService.deleteSession(userId, sessionId);
-        chatSessionService.deleteSession(userId, sessionId);
-        return ResponseUtil.success("会话已删除");
+        return String.format("""
+            用户补充：%s
+            图像识别结果：%s（%s，置信度%.2f）。
+            请结合知识库输出：
+            - 该物种典型形态特征（角型、体型、毛色、斑纹等）
+            - 分布与栖息地
+            - 易混淆物种区分要点
+            - 面向公众的简短科普说明
+            """, userText, zhLabel, enLabel, score);
     }
 
     private Long decideKbIdSilently(Long userId, String sessionId, String question) {
@@ -369,5 +457,44 @@ public class ChatController {
         return (cand.getTop1Score() - cur.getTop1Score()) >= 0.15;
     }
 
+    private static final Map<String, String> EN2ZH = Map.ofEntries(
+            Map.entry("David's Deer", "麋鹿"),
+            Map.entry("Eld's Deer", "坡鹿"),
+            Map.entry("Moose", "驼鹿"),
+            Map.entry("Red Deer", "马鹿"),
+            Map.entry("Reeves' Muntjac", "小麂"),      // 注意：你给的是 Reeve's（你的 class list 里可能是 Reeves'）
+            Map.entry("Chinese Water Deer", "獐"),
+            Map.entry("Roe Deer", "狍"),
+            Map.entry("Sika Deer", "梅花鹿"),
+            Map.entry("Tufted Deer", "毛冠鹿"),
+            Map.entry("White-Lipped Deer", "白唇鹿"),
+            Map.entry("Sambar Deer", "水鹿"),
+            Map.entry("Red Muntjac", "赤麂")
+    );
+    private String pickBestLabel(VisionPredictResponse pred) {
+        if (pred == null) return null;
+
+        // 优先从 scores 选最大值（你要求的逻辑）
+        if (pred.getScores() != null && !pred.getScores().isEmpty()) {
+            return pred.getScores().entrySet().stream()
+                    .max(Map.Entry.comparingByValue())
+                    .map(Map.Entry::getKey)
+                    .orElse(pred.getPredict_class());
+        }
+
+        // fallback：没有 scores 就用 predicted_class
+        return pred.getPredict_class();
+    }
+
+    private double pickBestScore(VisionPredictResponse pred, String bestLabel) {
+        if (pred == null || bestLabel == null) return 0.0;
+        if (pred.getScores() == null) return pred.getConfidence() == null ? 0.0 : pred.getConfidence();
+        return pred.getScores().getOrDefault(bestLabel, pred.getConfidence() == null ? 0.0 : pred.getConfidence());
+    }
+
+    private String mapToChinese(String enLabel) {
+        if (enLabel == null) return null;
+        return EN2ZH.getOrDefault(enLabel, enLabel); // 找不到就原样返回
+    }
 
 }
