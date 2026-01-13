@@ -15,4 +15,11 @@ public interface ChatSessionService {
 
     void deleteSession(Long userId, String sessionId);
 
+    void ensureSessionExists(Long userId, String sessionId);
+
+    void setCurrentKb(Long userId, String sessionId, Long kbId, boolean switched);
+
+    void tickCooldown(Long userId, String sessionId); // 每轮 -1
+
+
 }

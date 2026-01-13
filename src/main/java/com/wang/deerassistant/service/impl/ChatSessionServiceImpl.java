@@ -30,6 +30,8 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         s.setUserId(userId);
         s.setSessionId(sessionId);
         s.setTitle("新对话");
+        s.setCurrentKbId(null);
+        s.setSwitchCooldown(0);
         mapper.insert(s);
     }
 
@@ -114,5 +116,43 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                         .eq(ChatSession::getSessionId, sessionId)
         );
     }
+
+    @Override
+    public void ensureSessionExists(Long userId, String sessionId) {
+        ChatSession s = getSession(userId, sessionId);
+        if (s == null) {
+            createSession(userId, sessionId);
+        }
+    }
+
+    @Override
+    public void setCurrentKb(Long userId, String sessionId, Long kbId, boolean switched) {
+        UpdateWrapper<ChatSession> wrapper = new UpdateWrapper<>();
+        wrapper.eq("user_id", userId)
+                .eq("session_id", sessionId)
+                .set("current_kb_id", kbId);
+
+        if (switched) {
+            wrapper.set("last_switch_at", java.time.LocalDateTime.now())
+                    .set("switch_cooldown", 8); // ✅ 默认冷却 8 轮
+        }
+        mapper.update(null, wrapper);
+    }
+
+    @Override
+    public void tickCooldown(Long userId, String sessionId) {
+        ChatSession s = getSession(userId, sessionId);
+        if (s == null) return;
+        Integer cd = s.getSwitchCooldown();
+        if (cd == null) cd = 0;
+        if (cd <= 0) return;
+
+        UpdateWrapper<ChatSession> wrapper = new UpdateWrapper<>();
+        wrapper.eq("user_id", userId)
+                .eq("session_id", sessionId)
+                .set("switch_cooldown", cd - 1);
+        mapper.update(null, wrapper);
+    }
+
 }
 

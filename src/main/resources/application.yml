@@ -37,6 +37,13 @@ spring:
       table: ${PG_TABLE:deer_knowledge}
       dimension: ${PG_DIM:1024}
 
+    pgvector:
+      username: ${PG_USER}
+      password: ${PG_PASS}
+      table: ${PG_TABLE:deer_knowledge}
+      dimension: ${PG_DIM:1024}
+
+
   # =======================
   # JPA
   # =======================
