@@ -12,6 +12,7 @@ import com.wang.deerassistant.mapper.KnowledgeBaseMapper;
 import com.wang.deerassistant.service.ChatHistoryService;
 import com.wang.deerassistant.service.ChatSessionService;
 import com.wang.deerassistant.service.KbRoutingService;
+import com.wang.deerassistant.service.OssStorageService;
 import com.wang.deerassistant.service.VisionRecognizeService;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.message.ChatMessage;
@@ -59,6 +60,7 @@ public class ChatController {
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final KbRoutingService kbRoutingService;
     private final VisionRecognizeService visionRecognizeService;
+    private final OssStorageService ossStorageService;
 
 
 
@@ -71,7 +73,7 @@ public class ChatController {
             @RequestParam String question,
             @RequestParam(required = false) String sessionId
     ) {
-
+        String originalQuestion = question == null ? "" : question;
         if (sessionId == null || sessionId.isEmpty()) {
             sessionId = UUID.randomUUID().toString();
         }
@@ -82,9 +84,8 @@ public class ChatController {
 
         // ✅ 每轮递减冷却
         chatSessionService.tickCooldown(userId, finalSessionId);
-
-        // 1. 保存用户消息
-        chatHistoryService.saveUserMessage(userId, finalSessionId, question);
+        // Save original user message (before server-side augmentation).
+        chatHistoryService.saveUserMessage(userId, finalSessionId, originalQuestion);
 
         return doStreamChat(userId,finalSessionId,question);
     }
@@ -134,6 +135,7 @@ public class ChatController {
             @RequestParam(required = false) String sessionId,
             @RequestParam(required = false) MultipartFile file
     ) {
+        String originalQuestion = question == null ? "" : question;
         if (sessionId == null || sessionId.isEmpty()) {
             sessionId = UUID.randomUUID().toString();
         }
@@ -145,29 +147,41 @@ public class ChatController {
 
         // 如果带图片：先识别，再构造增强 question
         VisionPredictResponse pred = null;
+        String imageUrl = null;
         if (file != null && !file.isEmpty()) {
+            log.info("Vision request: userId={}, sessionId={}, filename={}, size={}, contentType={}",
+                    userId, finalSessionId, file.getOriginalFilename(), file.getSize(), file.getContentType());
+            imageUrl = ossStorageService.uploadChatImage(file);
             pred = visionRecognizeService.predict(file);
 
-            String userText = (question == null || question.isBlank())
-                    ? "请识别图中鹿科动物并科普。"
-                    : question;
+            String userText = (originalQuestion.isBlank())
+                    ? "\u8bf7\u8bc6\u522b\u56fe\u4e2d\u9e7f\u79d1\u52a8\u7269\u5e76\u79d1\u666e\u3002"
+                    : originalQuestion;
 
-            // 只取 score 最高的类别
             String bestEn = pickBestLabel(pred);
             double bestScore = pickBestScore(pred, bestEn);
             String bestZh = mapToChinese(bestEn);
 
-            // 用“中文+英文+分数”构造提示词（更利于中文知识库检索）
+            log.info("Vision result: userId={}, sessionId={}, predicted={}, score={}, zhLabel={}",
+                    userId, finalSessionId, bestEn, bestScore, bestZh);
+
             question = buildQuestionWithPrediction(userText, bestZh, bestEn, bestScore);
 
-            // 推荐：存一条 system 记录（中英都存，便于追溯）
             chatHistoryService.saveSystemMessage(userId, finalSessionId,
                     String.format("[VISION] predicted=%s(%s) score=%.4f",
                             bestZh, bestEn, bestScore));
         }
 
-        // 保存用户消息（保存增强后的 question，保证可复现）
-        chatHistoryService.saveUserMessage(userId, finalSessionId, question);
+        if (question == null || question.isBlank()) {
+            question = "\u8bf7\u63cf\u8ff0\u4f60\u7684\u95ee\u9898\u3002";
+        }
+
+        // Save original user message (before server-side augmentation).
+        if (imageUrl != null) {
+            chatHistoryService.saveUserMessage(userId, finalSessionId, originalQuestion, imageUrl);
+        } else {
+            chatHistoryService.saveUserMessage(userId, finalSessionId, originalQuestion);
+        }
 
         // 复用你原来的 SSE/RAG 主流程
         return doStreamChat(userId, finalSessionId, question);
@@ -184,27 +198,26 @@ public class ChatController {
         int MAX_HISTORY = 6;
         int start = Math.max(0, historyList.size() - MAX_HISTORY);
 
-        // ✅ 内部 KB 来源标注（对用户透明）
-        // 我们用一个简单约定：若 role=ai，则在文本前加 [KB=<currentKbId|NONE>]
-        // 由于历史表没存 sourceKbId，这里用“当前会话kb”做弱标注；
-        // 若你想更准，需要把每条 AI 消息的 source_kb_id 单独存表（后续再升级）。
-        ChatSession session = chatSessionService.getSession(userId, sessionId);
-        Long sessionKb = session != null ? session.getCurrentKbId() : null;
-        String kbTag = "[KB=" + (sessionKb == null ? "NONE" : sessionKb) + "] ";
-
         for (int i = start; i < historyList.size(); i++) {
             ChatHistory h = historyList.get(i);
             if ("user".equals(h.getRole())) {
-                messages.add(UserMessage.from(h.getMessage()));
+                String msg = h.getMessage();
+                if (msg != null && !msg.isBlank()) {
+                    messages.add(UserMessage.from(msg));
+                }
             } else if ("ai".equals(h.getRole())) {
-                messages.add(AiMessage.from(kbTag + h.getMessage()));
+                String msg = h.getMessage();
+                if (msg != null && !msg.isBlank()) {
+                    messages.add(AiMessage.from(msg));
+                }
             } else {
-                // system 也塞进去（你之前有 system 记录）
                 messages.add(SystemMessage.from(h.getMessage()));
             }
         }
 
-        // 加入最新问题
+        if (question == null || question.isBlank()) {
+            question = "\u8bf7\u63cf\u8ff0\u4f60\u7684\u95ee\u9898\u3002";
+        }
         messages.add(UserMessage.from(question));
 
         SseEmitter emitter = new SseEmitter(0L);
@@ -221,26 +234,24 @@ public class ChatController {
         // ✅ 选择 kbId（用户无感）
         Long chosenKbId = decideKbIdSilently(userId, sessionId, question);
 
+        log.info("RAG decision: userId={}, sessionId={}, chosenKbId={}, question=\"{}\"",
+                userId, sessionId, chosenKbId, question);
+
         // ✅ 做检索（kbId=null => NONE 不检索）
         String ragContext = "";
         if (chosenKbId != null) {
             ragContext = retrieveContext(question, chosenKbId);
         }
-
-        // ✅ 系统约束：跨 KB 历史事实不得直接当依据
-        String routerGuard = """
-            你是鹿科动物识别助手。
-            注意：对话历史中可能包含形如 [KB=xxx] 的内部标记，这些标记仅表示该信息来源于某个知识库。
-            规则：
-            - 如果当前使用的知识库与历史标记不一致，则不得把历史中的具体事实当作确定依据，除非你能从本轮检索内容中再次确认。
-            - 当本轮没有检索内容时（NONE），不要引用任何带 [KB=] 标记的事实作为确定结论，必要时用不确定表达并引导用户补充信息。
-            """;
-
+        String routerGuard = "\u4f60\u662f\u9e7f\u79d1\u52a8\u7269\u8bc6\u522b\u52a9\u624b\u3002\n"
+            + "\u6ce8\u610f\uff1a\u5bf9\u8bdd\u5386\u53f2\u4e2d\u53ef\u80fd\u5305\u542b\u5f62\u5982 [KB=xxx] \u7684\u5185\u90e8\u6807\u8bb0\uff0c\u8fd9\u4e9b\u6807\u8bb0\u4ec5\u8868\u793a\u8be5\u4fe1\u606f\u6765\u6e90\u4e8e\u67d0\u4e2a\u77e5\u8bc6\u5e93\u3002\n"
+            + "\u89c4\u5219\uff1a\n"
+            + "- \u5982\u679c\u5f53\u524d\u4f7f\u7528\u7684\u77e5\u8bc6\u5e93\u4e0e\u5386\u53f2\u6807\u8bb0\u4e0d\u4e00\u81f4\uff0c\u5219\u4e0d\u5f97\u628a\u5386\u53f2\u4e2d\u7684\u5177\u4f53\u4e8b\u5b9e\u5f53\u4f5c\u786e\u5b9a\u4f9d\u636e\uff0c\u9664\u975e\u4f60\u80fd\u4ece\u672c\u8f6e\u68c0\u7d22\u5185\u5bb9\u4e2d\u518d\u6b21\u786e\u8ba4\u3002\n"
+            + "- \u5f53\u672c\u8f6e\u6ca1\u6709\u68c0\u7d22\u5185\u5bb9\u65f6\uff08NONE\uff09\uff0c\u4e0d\u8981\u5f15\u7528\u4efb\u4f55\u5e26 [KB=] \u6807\u8bb0\u7684\u4e8b\u5b9e\u4f5c\u4e3a\u786e\u5b9a\u7ed3\u8bba\uff0c\u5fc5\u8981\u65f6\u7528\u4e0d\u786e\u5b9a\u8868\u8fbe\u5e76\u5f15\u5bfc\u7528\u6237\u8865\u5145\u4fe1\u606f\u3002";
         messages.add(0, SystemMessage.from(routerGuard));
 
         if (ragContext != null && !ragContext.isBlank()) {
             messages.add(SystemMessage.from(
-                    "请根据以下知识库检索内容回答用户问题：\n\n" + ragContext
+                    "\u8bf7\u6839\u636e\u4ee5\u4e0b\u77e5\u8bc6\u5e93\u68c0\u7d22\u5185\u5bb9\u56de\u7b54\u7528\u6237\u95ee\u9898\uff1a\n\n" + ragContext
             ));
         }
 
@@ -260,8 +271,6 @@ public class ChatController {
             public void onCompleteResponse(ChatResponse response) {
 
                 String finalAnswer = aiAnswerBuilder.toString();
-
-                // 保存 AI 回复（对用户透明，不保存 KB tag）
                 chatHistoryService.saveAiMessage(userId, sessionId, finalAnswer);
 
                 String newTitle = chatSessionService.generateTitleIfNeeded(userId, sessionId);
@@ -291,11 +300,10 @@ public class ChatController {
             return String.format("""
                 用户补充：%s
                 图像识别结果倾向于：%s（%s，置信度%.2f）。
-                由于置信度较低，请你结合知识库：
                 1) 给出该物种的关键形态特征与栖息环境；
                 2) 提供与常见混淆鹿科的区分点；
-                3) 提示用户补拍哪些特征可提高确定性；
-                4) 结论用谨慎表述。
+                3) 结论用谨慎表述。
+                你要按照我给你的要求生成恢复，但是不要在你的回复中出现我给你的要求
                 """, userText, zhLabel, enLabel, score);
         }
 
@@ -307,6 +315,7 @@ public class ChatController {
             - 分布与栖息地
             - 易混淆物种区分要点
             - 面向公众的简短科普说明
+            你要按照我给你的要求生成恢复，但是不要在你的回复中出现我给你的要求
             """, userText, zhLabel, enLabel, score);
     }
 
@@ -365,6 +374,9 @@ public class ChatController {
 
         var decision = kbRoutingService.route(question, bases);
 
+        log.info("KB route decision: kbId={}, confidence={}, askUser={}, reason={}",
+                decision.getKbId(), decision.getConfidence(), decision.isAskUser(), decision.getReason());
+
         // 置信度阈值
         if (decision.getConfidence() < 0.60) return null;
 
@@ -390,6 +402,17 @@ public class ChatController {
                 .build();
 
         List<Content> retrieved = retriever.retrieve(Query.from(question));
+
+        log.info("RAG retrieve: kbId={}, question=\"{}\", hitCount={}", kbId, question, retrieved.size());
+        for (int i = 0; i < retrieved.size(); i++) {
+            Content c = retrieved.get(i);
+            String docId = c.metadata() != null ? (String) c.metadata().get("docId") : null;
+            String chunkIndex = c.metadata() != null ? (String) c.metadata().get("chunkIndex") : null;
+            String titlePath = c.metadata() != null ? (String) c.metadata().get("titlePath") : null;
+            int textLen = c.textSegment() == null || c.textSegment().text() == null ? 0 : c.textSegment().text().length();
+            log.info("RAG hit[{}]: docId={}, chunkIndex={}, titlePath={}, textLen={}",
+                    i, docId, chunkIndex, titlePath, textLen);
+        }
 
         Comparator<Content> byChunkIndex = Comparator.comparing(c -> {
             String idx = c.metadata() != null ? (String) c.metadata().get("chunkIndex") : null;
@@ -433,6 +456,7 @@ public class ChatController {
             if (hit > 0 && res.matches().get(0) != null) {
                 top1 = res.matches().get(0).score();
             }
+            log.info("RAG quality: kbId={}, question=\"{}\", hitCount={}, top1Score={}", kbId, question, hit, top1);
             return new RetrievalQuality(hit, top1);
 
         } catch (Exception e) {

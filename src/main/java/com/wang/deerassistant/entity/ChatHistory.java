@@ -22,5 +22,7 @@ public class ChatHistory {
 
     private String message;
 
+    private String imageUrl;
+
     private LocalDateTime createdAt;
 }

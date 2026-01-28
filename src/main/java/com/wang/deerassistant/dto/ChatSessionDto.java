@@ -9,5 +9,6 @@ public class ChatSessionDto {
 
     private String sessionId;
     private String lastMessage;
+    private String title;
     private LocalDateTime updatedAt;
 }

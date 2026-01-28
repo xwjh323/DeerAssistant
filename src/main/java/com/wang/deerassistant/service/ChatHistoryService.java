@@ -9,6 +9,8 @@ public interface ChatHistoryService {
 
     void saveUserMessage(Long userId, String sessionId, String message);
 
+    void saveUserMessage(Long userId, String sessionId, String message, String imageUrl);
+
     void saveAiMessage(Long userId, String sessionId, String message);
 
     List<ChatHistory> listBySessionId(Long userId, String sessionId);
